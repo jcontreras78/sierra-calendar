@@ -26,7 +26,11 @@ function parseIcsDate(value) {
 }
 
 export function parseIcsEvents(icsText) {
-  const lines = unfoldIcs(icsText).split(/\r?\n/);
+  const normalized = unfoldIcs(icsText);
+  if (!normalized.includes('BEGIN:VCALENDAR')) {
+    throw new Error('Feed did not return calendar data');
+  }
+  const lines = normalized.split(/\r?\n/);
   const events = [];
   let current = null;
 

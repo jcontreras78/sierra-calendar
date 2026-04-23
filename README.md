@@ -23,6 +23,8 @@ cp .env.example .env
 ```
 
 The app uses a local Vite proxy endpoint to avoid browser CORS issues.
+For Cloudflare Pages production, a Pages Function is included at
+`functions/api/airbnb-ical/[[path]].js` so `/api/airbnb-ical/...` works after deploy.
 
 ## Important
 
