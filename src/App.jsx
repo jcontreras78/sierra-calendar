@@ -563,7 +563,7 @@ export default function App() {
 
       <section className="shell">
         <header className="topbar">
-          <h1>11215 Sierra Calendar</h1>
+          <h1>Sierra Calendar</h1>
           <div className="controls">
             <button type="button" onClick={() => setMonth(addMonths(month, -1))}>
               Prev
