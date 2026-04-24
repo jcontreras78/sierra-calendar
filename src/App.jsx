@@ -27,10 +27,17 @@ function toLocalIcalProxyUrl(fullFeedUrl) {
   }
 }
 
+function createEventId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `evt-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
+}
+
 export default function App() {
   const [month, setMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState(new Date());
-  const [modalDate, setModalDate] = useState(null);
+  const [modalRange, setModalRange] = useState(null);
   const [bookedDays, setBookedDays] = useState(new Set());
   const [blockedDays, setBlockedDays] = useState(new Set());
   const [checkoutDays, setCheckoutDays] = useState(new Set());
@@ -100,8 +107,11 @@ export default function App() {
     return grouped;
   }, [customEvents]);
 
-  const activeDate = modalDate || selectedDate;
+  const activeDate = modalRange?.start || selectedDate;
   const activeDayKey = toDayKey(activeDate);
+  const isRangeMode = Boolean(
+    modalRange && toDayKey(modalRange.start) !== toDayKey(modalRange.end)
+  );
   const activeDayEvents = customEventsByDay[activeDayKey] || [];
 
   function resetEventForm() {
@@ -112,13 +122,23 @@ export default function App() {
 
   function openDayModal(date) {
     setSelectedDate(date);
-    setModalDate(date);
+    setModalRange({ start: new Date(date), end: new Date(date) });
+    resetEventForm();
+    setPinError('');
+  }
+
+  function openRangeModal(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const [from, to] = start <= end ? [start, end] : [end, start];
+    setSelectedDate(from);
+    setModalRange({ start: from, end: to });
     resetEventForm();
     setPinError('');
   }
 
   function closeDayModal() {
-    setModalDate(null);
+    setModalRange(null);
     resetEventForm();
     setPinError('');
     setPinInput('');
@@ -169,27 +189,45 @@ export default function App() {
         )
       );
     } else {
+      const rangeStart = modalRange?.start || activeDate;
+      const rangeEnd = modalRange?.end || activeDate;
+      const dates = [];
+      const d = new Date(rangeStart);
+      const seriesId = createEventId();
+      while (d <= rangeEnd) {
+        dates.push(toDayKey(d));
+        d.setDate(d.getDate() + 1);
+      }
+
       setCustomEvents((events) => [
         ...events,
-        {
-          id: crypto.randomUUID(),
+        ...dates.map((dateKey) => ({
+          id: createEventId(),
+          seriesId,
           title: title.trim(),
           color,
-          date: activeDayKey
-        }
+          date: dateKey
+        }))
       ]);
     }
 
     resetEventForm();
   }
 
-  function removeCustomEvent(id) {
+  function removeCustomEvent(eventToRemove) {
     if (!isPinUnlocked) {
       setPinError('Enter PIN to modify events');
       return;
     }
-    setCustomEvents((events) => events.filter((event) => event.id !== id));
-    if (editingEventId === id) resetEventForm();
+    setCustomEvents((events) =>
+      events.filter(
+        (event) =>
+          eventToRemove.seriesId
+            ? event.seriesId !== eventToRemove.seriesId
+            : event.id !== eventToRemove.id
+      )
+    );
+    if (editingEventId === eventToRemove.id) resetEventForm();
   }
 
   const monthLabel = month.toLocaleDateString(undefined, {
@@ -197,13 +235,23 @@ export default function App() {
     year: 'numeric'
   });
 
-  const modalLabel = modalDate
-    ? modalDate.toLocaleDateString(undefined, {
-        weekday: 'long',
-        month: 'long',
-        day: 'numeric',
-        year: 'numeric'
-      })
+  const modalLabel = modalRange
+    ? isRangeMode
+      ? `${modalRange.start.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric'
+        })} - ${modalRange.end.toLocaleDateString(undefined, {
+          month: 'short',
+          day: 'numeric',
+          year: 'numeric'
+        })}`
+      : modalRange.start.toLocaleDateString(undefined, {
+          weekday: 'long',
+          month: 'long',
+          day: 'numeric',
+          year: 'numeric'
+        })
     : '';
 
   return (
@@ -230,30 +278,13 @@ export default function App() {
           customEventsByDay={customEventsByDay}
           selectedDate={selectedDate}
           onSelectDate={openDayModal}
+          onSelectRange={openRangeModal}
         />
 
-        <section className="panel-grid">
-          <article className="panel">
-            <h2>Airbnb sync</h2>
-            <p className="muted">Feed URL: from VITE_AIRBNB_ICAL_URL</p>
-            <p className="muted">Click any day to open event modal.</p>
-            {isLoading ? <p>Loading bookings...</p> : null}
-            {error ? <p className="error">{error}</p> : null}
-            {!isLoading && !error ? (
-              <>
-                <p>
-                  Loaded booked nights: <strong>{bookedDays.size}</strong>
-                </p>
-                <p>
-                  Loaded blocked/cleaning nights: <strong>{blockedDays.size}</strong>
-                </p>
-              </>
-            ) : null}
-          </article>
-        </section>
+        {error ? <p className="error">{error}</p> : null}
       </section>
 
-      {modalDate ? (
+      {modalRange ? (
         <div className="modal-overlay" role="presentation" onClick={closeDayModal}>
           <section className="modal" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
             <header className="modal__header">
@@ -262,6 +293,9 @@ export default function App() {
                 Close
               </button>
             </header>
+            {isRangeMode ? (
+              <p className="muted">Adding an event will apply to every selected day in this range.</p>
+            ) : null}
 
             <div className="pin-row">
               {!isPinUnlocked ? (
@@ -303,30 +337,32 @@ export default function App() {
                 />
               </label>
               <button type="submit" disabled={!isPinUnlocked}>
-                {editingEventId ? 'Save changes' : 'Add event'}
+                {editingEventId ? 'Save changes' : isRangeMode ? 'Add to range' : 'Add event'}
               </button>
-              {editingEventId ? (
+              {editingEventId && !isRangeMode ? (
                 <button type="button" onClick={resetEventForm} disabled={!isPinUnlocked}>
                   Cancel edit
                 </button>
               ) : null}
             </form>
 
-            <div className="event-list">
-              {activeDayEvents.length === 0 ? <p className="muted">No custom events for this day.</p> : null}
-              {activeDayEvents.map((event) => (
-                <div key={event.id} className="event-row">
-                  <span className="event-dot" style={{ background: event.color }} />
-                  <span>{event.title}</span>
-                  <button type="button" onClick={() => startEditEvent(event)} disabled={!isPinUnlocked}>
-                    Edit
-                  </button>
-                  <button type="button" onClick={() => removeCustomEvent(event.id)} disabled={!isPinUnlocked}>
-                    Delete
-                  </button>
-                </div>
-              ))}
-            </div>
+            {!isRangeMode ? (
+              <div className="event-list">
+                {activeDayEvents.length === 0 ? <p className="muted">No custom events for this day.</p> : null}
+                {activeDayEvents.map((event) => (
+                  <div key={event.id} className="event-row">
+                    <span className="event-dot" style={{ background: event.color }} />
+                    <span>{event.title}</span>
+                    <button type="button" onClick={() => startEditEvent(event)} disabled={!isPinUnlocked}>
+                      Edit
+                    </button>
+                    <button type="button" onClick={() => removeCustomEvent(event)} disabled={!isPinUnlocked}>
+                      Delete
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : null}
           </section>
         </div>
       ) : null}

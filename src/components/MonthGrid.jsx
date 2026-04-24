@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react';
 import {
   addDays,
   endOfMonth,
@@ -17,6 +18,10 @@ function isPastDay(date) {
   return d < today;
 }
 
+function eventSignature(event) {
+  return `${event.title}__${event.color}`;
+}
+
 export default function MonthGrid({
   month,
   bookedDays,
@@ -24,8 +29,48 @@ export default function MonthGrid({
   checkoutDays,
   customEventsByDay,
   selectedDate,
-  onSelectDate
+  onSelectDate,
+  onSelectRange
 }) {
+  const [dragStart, setDragStart] = useState(null);
+  const [dragCurrent, setDragCurrent] = useState(null);
+
+  useEffect(() => {
+    function clearDrag() {
+      setDragStart(null);
+      setDragCurrent(null);
+    }
+
+    window.addEventListener('mouseup', clearDrag);
+    return () => window.removeEventListener('mouseup', clearDrag);
+  }, []);
+
+  function handleMouseDown(date) {
+    setDragStart(new Date(date));
+    setDragCurrent(new Date(date));
+  }
+
+  function handleMouseEnter(date) {
+    if (!dragStart) return;
+    setDragCurrent(new Date(date));
+  }
+
+  function handleMouseUp(date) {
+    if (!dragStart) return;
+    const startKey = toDayKey(dragStart);
+    const end = new Date(date);
+    const endKey = toDayKey(end);
+
+    if (startKey === endKey) {
+      onSelectDate(end);
+    } else {
+      onSelectRange(dragStart, end);
+    }
+
+    setDragStart(null);
+    setDragCurrent(null);
+  }
+
   const monthStart = startOfMonth(month);
   const monthEnd = endOfMonth(month);
   const gridStart = startOfWeek(monthStart);
@@ -35,6 +80,7 @@ export default function MonthGrid({
   let day = new Date(gridStart);
 
   while (day <= gridEnd) {
+    const cellDate = new Date(day);
     const dayKey = toDayKey(day);
     const prevDayKey = toDayKey(addDays(day, -1));
     const nextDayKey = toDayKey(addDays(day, 1));
@@ -53,6 +99,16 @@ export default function MonthGrid({
     const shouldShowBlockedBand = isBlocked && !isSingleDayBlocked;
     const inCurrentMonth = day.getMonth() === month.getMonth();
     const isSelected = selectedDate && toDayKey(selectedDate) === dayKey;
+    const dragStartKey = dragStart ? toDayKey(dragStart) : '';
+    const dragCurrentKey = dragCurrent ? toDayKey(dragCurrent) : '';
+    const isInDragRange =
+      dragStartKey && dragCurrentKey
+        ? dayKey >= (dragStartKey < dragCurrentKey ? dragStartKey : dragCurrentKey) &&
+          dayKey <= (dragStartKey > dragCurrentKey ? dragStartKey : dragCurrentKey)
+        : false;
+
+    const hasEventWithSignature = (key, signature) =>
+      (customEventsByDay[key] || []).some((event) => eventSignature(event) === signature);
 
     cells.push(
       <button
@@ -64,12 +120,15 @@ export default function MonthGrid({
           isBlocked ? 'day-cell--blocked' : '',
           isCheckout ? 'day-cell--checkout' : '',
           isPast ? 'day-cell--past' : '',
+          isInDragRange ? 'day-cell--dragging' : '',
           isSelected ? 'day-cell--selected' : ''
         ]
           .filter(Boolean)
           .join(' ')
           .trim()}
-        onClick={() => onSelectDate(new Date(day))}
+        onMouseDown={() => handleMouseDown(cellDate)}
+        onMouseEnter={() => handleMouseEnter(cellDate)}
+        onMouseUp={() => handleMouseUp(cellDate)}
         type="button"
       >
         {isBooked ? (
@@ -110,24 +169,43 @@ export default function MonthGrid({
               .trim()}
           />
         ) : null}
+        {events.slice(0, 2).map((event, idx) => {
+          const signature = eventSignature(event);
+          const continuesFromPrev = hasEventWithSignature(prevDayKey, signature);
+          const continuesToNext = hasEventWithSignature(nextDayKey, signature);
+          const showLabel = !continuesFromPrev;
+
+          return (
+            <span
+              key={event.id}
+              className={[
+                'custom-band',
+                continuesFromPrev ? '' : 'custom-band--start',
+                continuesToNext ? '' : 'custom-band--end'
+              ]
+                .filter(Boolean)
+                .join(' ')
+                .trim()}
+              style={{ '--custom-color': event.color, '--custom-row': idx }}
+              title={event.title}
+            >
+              {showLabel ? <span className="custom-band__label">{event.title}</span> : null}
+            </span>
+          );
+        })}
         <span className="day-cell__number">{day.getDate()}</span>
         <div className="day-cell__meta">
           {showBookedLabel ? <span className="pill pill--booked">Booked</span> : null}
           {isBlocked ? (
             <span className={`pill pill--blocked${isCheckout ? ' pill--blocked-below-booking' : ''}`}>
-              Blocked / Cleaning
+              <span className="blocked-label-desktop">Blocked / Cleaning</span>
+              <span className="blocked-label-mobile">
+                Block
+                <br />
+                Clean
+              </span>
             </span>
           ) : null}
-          {events.slice(0, 2).map((event) => (
-            <span
-              key={event.id}
-              className="event-pill"
-              style={{ '--event-color': event.color }}
-              title={event.title}
-            >
-              {event.title}
-            </span>
-          ))}
           {events.length > 2 ? <span className="event-more">+{events.length - 2} more</span> : null}
         </div>
       </button>
