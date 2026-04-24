@@ -36,6 +36,7 @@ export default function MonthGrid({
   blockedDays,
   checkoutDays,
   blockedLabelByDay,
+  bookedLabelByDay,
   customEventsByDay,
   selectedDate,
   onSelectDate,
@@ -103,6 +104,7 @@ export default function MonthGrid({
     const bookingContinuesToNext = bookedDays.has(nextDayKey) || checkoutDays.has(nextDayKey);
     const shouldShowCheckoutBand = isCheckout && bookingContinuesFromPrev;
     const showBookedLabel = isBooked && !bookingContinuesFromPrev;
+    const bookedLabel = bookedLabelByDay?.[dayKey] || 'Booked';
     const blockedContinuesFromPrev = blockedDays.has(prevDayKey);
     const blockedContinuesToNext = blockedDays.has(nextDayKey);
     const isCheckoutBlocked = isBlocked && isCheckout;
@@ -216,7 +218,7 @@ export default function MonthGrid({
         <span className="day-cell__number">{day.getDate()}</span>
         {isToday ? <span className="day-cell__today-marker" aria-hidden="true" /> : null}
         <div className="day-cell__meta">
-          {showBookedLabel ? <span className="pill pill--booked">Booked</span> : null}
+          {showBookedLabel ? <span className="pill pill--booked">{bookedLabel}</span> : null}
           {isBlocked ? (
             <span className={`pill pill--blocked${isCheckout ? ' pill--blocked-below-booking' : ''}`}>
               <span className="blocked-label-desktop">{blockedLabel}</span>

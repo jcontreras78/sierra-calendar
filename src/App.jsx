@@ -24,7 +24,8 @@ function readStoredEvents() {
     return parsed.map((event) => ({
       ...event,
       eventType: event.eventType || EVENT_TYPE.NOTE,
-      overrideTargetType: event.overrideTargetType || ''
+      overrideTargetType: event.overrideTargetType || '',
+      details: event.details || ''
     }));
   } catch {
     return [];
@@ -106,12 +107,19 @@ function createEventId() {
   return `evt-${Date.now()}-${Math.floor(Math.random() * 1_000_000)}`;
 }
 
-function normalizeEventTitle(eventType, title) {
+function defaultTitleForType(eventType) {
   if (eventType === EVENT_TYPE.BOOKING) return 'Booked';
   if (eventType === EVENT_TYPE.BLOCKED) return 'Blocked';
   if (eventType === EVENT_TYPE.CLEANING) return 'Cleaning';
   if (eventType === EVENT_TYPE.HIDE) return 'Hidden';
-  return title.trim();
+  return '';
+}
+
+function normalizeEventTitle(eventType, title) {
+  const trimmed = (title || '').trim();
+  if (eventType === EVENT_TYPE.HIDE) return 'Hidden';
+  if (eventType === EVENT_TYPE.NOTE) return trimmed;
+  return trimmed || defaultTitleForType(eventType);
 }
 
 function defaultColorForType(type) {
@@ -165,6 +173,7 @@ export default function App() {
 
   const [editingEventId, setEditingEventId] = useState(null);
   const [title, setTitle] = useState('');
+  const [details, setDetails] = useState('');
   const [color, setColor] = useState('#2a9d8f');
   const [eventType, setEventType] = useState(EVENT_TYPE.NOTE);
   const [overrideTargetType, setOverrideTargetType] = useState('');
@@ -229,6 +238,8 @@ export default function App() {
     const effectiveBlocked = new Set(blockedDays);
     const effectiveCheckout = new Set(checkoutDays);
     const blockedLabelByDay = { ...airbnbBlockedLabelByDay };
+    const bookedLabelByDay = {};
+    for (const day of effectiveBooked) bookedLabelByDay[day] = 'Booked';
 
     const overridesByDay = {};
     for (const event of customEvents) {
@@ -245,12 +256,14 @@ export default function App() {
           effectiveBooked.add(day);
           effectiveBlocked.delete(day);
           effectiveCheckout.delete(day);
+          bookedLabelByDay[day] = event.title || 'Booked';
           delete blockedLabelByDay[day];
         } else if (type === EVENT_TYPE.BLOCKED || type === EVENT_TYPE.CLEANING) {
           effectiveBlocked.add(day);
           effectiveBooked.delete(day);
           effectiveCheckout.delete(day);
-          blockedLabelByDay[day] = type === EVENT_TYPE.CLEANING ? 'Cleaning' : 'Blocked';
+          delete bookedLabelByDay[day];
+          blockedLabelByDay[day] = event.title || (type === EVENT_TYPE.CLEANING ? 'Cleaning' : 'Blocked');
         }
       }
 
@@ -261,6 +274,7 @@ export default function App() {
         if (target === EVENT_TYPE.BOOKING) {
           effectiveBooked.delete(day);
           effectiveCheckout.delete(day);
+          delete bookedLabelByDay[day];
         } else if (target === EVENT_TYPE.BLOCKED || target === EVENT_TYPE.CLEANING) {
           effectiveBlocked.delete(day);
           delete blockedLabelByDay[day];
@@ -268,12 +282,13 @@ export default function App() {
           effectiveBooked.delete(day);
           effectiveBlocked.delete(day);
           effectiveCheckout.delete(day);
+          delete bookedLabelByDay[day];
           delete blockedLabelByDay[day];
         }
       }
     }
 
-    return { bookedDays: effectiveBooked, blockedDays: effectiveBlocked, checkoutDays: effectiveCheckout, blockedLabelByDay };
+    return { bookedDays: effectiveBooked, blockedDays: effectiveBlocked, checkoutDays: effectiveCheckout, blockedLabelByDay, bookedLabelByDay };
   }, [bookedDays, blockedDays, checkoutDays, airbnbBlockedLabelByDay, customEvents]);
 
   const activeDate = modalRange?.start || selectedDate;
@@ -283,6 +298,15 @@ export default function App() {
   const activeDayEvents = customEvents.filter((event) => event.date === activeDayKey);
   const activeDayOverrideEvents = activeDayEvents.filter((event) => (event.eventType || EVENT_TYPE.NOTE) !== EVENT_TYPE.NOTE);
   const activeDayNoteEvents = activeDayEvents.filter((event) => (event.eventType || EVENT_TYPE.NOTE) === EVENT_TYPE.NOTE);
+  const activeDayOverrideByType = useMemo(() => {
+    const byType = {};
+    for (const event of activeDayOverrideEvents) {
+      const type = event.eventType || EVENT_TYPE.NOTE;
+      if (type === EVENT_TYPE.HIDE) continue;
+      if (!byType[type]) byType[type] = event;
+    }
+    return byType;
+  }, [activeDayOverrideEvents]);
 
   const hiddenOverrideByTargetType = useMemo(() => {
     const byType = {};
@@ -293,35 +317,70 @@ export default function App() {
     return byType;
   }, [activeDayOverrideEvents]);
 
-  const availableOverrideTypes = useMemo(() => {
-    const types = [];
-    const hasBooking =
-      effectiveAvailability.bookedDays.has(activeDayKey) || effectiveAvailability.checkoutDays.has(activeDayKey);
-    if (hasBooking) types.push(EVENT_TYPE.BOOKING);
+  const activeDayAirbnbRows = useMemo(() => {
+    const findOverrideForRange = (type) => {
+      const exact = activeDayOverrideByType[type];
+      if (exact) return exact;
 
-    if (effectiveAvailability.blockedDays.has(activeDayKey)) {
-      const label = effectiveAvailability.blockedLabelByDay?.[activeDayKey];
-      if (label === 'Cleaning') {
-        types.push(EVENT_TYPE.CLEANING);
-      } else {
-        types.push(EVENT_TYPE.BLOCKED);
+      let predicate = null;
+      if (type === EVENT_TYPE.BOOKING) {
+        predicate = (key) => effectiveAvailability.bookedDays.has(key);
+      } else if (type === EVENT_TYPE.BLOCKED) {
+        predicate = (key) =>
+          effectiveAvailability.blockedDays.has(key) &&
+          (effectiveAvailability.blockedLabelByDay?.[key] || 'Blocked') !== 'Cleaning';
+      } else if (type === EVENT_TYPE.CLEANING) {
+        predicate = (key) =>
+          effectiveAvailability.blockedDays.has(key) &&
+          (effectiveAvailability.blockedLabelByDay?.[key] || '') === 'Cleaning';
       }
-    }
 
-    return types;
-  }, [activeDayKey, effectiveAvailability]);
+      if (!predicate || !predicate(activeDayKey)) return null;
+      const rangeKeys = new Set(collectContiguousKeys(activeDayKey, predicate));
+      const matches = customEvents.filter(
+        (event) => (event.eventType || EVENT_TYPE.NOTE) === type && rangeKeys.has(event.date)
+      );
+      return matches.length ? matches[matches.length - 1] : null;
+    };
 
-  const overrideTypesForModal = useMemo(() => {
-    const set = new Set(availableOverrideTypes);
-    for (const targetType of Object.keys(hiddenOverrideByTargetType)) {
-      if (targetType) set.add(targetType);
+    const rows = [];
+    if (effectiveAvailability.bookedDays.has(activeDayKey)) {
+      const bookingOverride = findOverrideForRange(EVENT_TYPE.BOOKING);
+      rows.push({
+        key: 'booking',
+        type: EVENT_TYPE.BOOKING,
+        label: effectiveAvailability.bookedLabelByDay?.[activeDayKey] || bookingOverride?.title || 'Booked',
+        details: bookingOverride?.details || ''
+      });
     }
-    return Array.from(set);
-  }, [availableOverrideTypes, hiddenOverrideByTargetType]);
+    if (effectiveAvailability.blockedDays.has(activeDayKey)) {
+      const blockedLabel = effectiveAvailability.blockedLabelByDay?.[activeDayKey] || 'Blocked';
+      const blockedType = blockedLabel.toLowerCase().includes('clean') ? EVENT_TYPE.CLEANING : EVENT_TYPE.BLOCKED;
+      const blockedOverride = findOverrideForRange(blockedType);
+      rows.push({
+        key: blockedType,
+        type: blockedType,
+        label: blockedLabel,
+        details: blockedOverride?.details || ''
+      });
+    }
+    for (const [targetType, hiddenEvent] of Object.entries(hiddenOverrideByTargetType)) {
+      if (!targetType) continue;
+      if (rows.some((row) => row.type === targetType)) continue;
+      rows.push({
+        key: `hidden-${targetType}`,
+        type: targetType,
+        label: targetType === EVENT_TYPE.BOOKING ? 'Booked' : targetType === EVENT_TYPE.CLEANING ? 'Cleaning' : 'Blocked',
+        details: hiddenEvent?.details || ''
+      });
+    }
+    return rows;
+  }, [activeDayKey, activeDayOverrideByType, effectiveAvailability, hiddenOverrideByTargetType, customEvents]);
 
   function resetEventForm() {
     setEditingEventId(null);
     setTitle('');
+    setDetails('');
     setColor('#2a9d8f');
     setEventType(EVENT_TYPE.NOTE);
     setOverrideTargetType('');
@@ -333,7 +392,6 @@ export default function App() {
   }
 
   function openDayModal(date) {
-    if (!isPinUnlocked) return;
     setSelectedDate(date);
     setModalRange({ start: new Date(date), end: new Date(date) });
     resetEventForm();
@@ -342,7 +400,10 @@ export default function App() {
   }
 
   function openRangeModal(startDate, endDate) {
-    if (!isPinUnlocked) return;
+    if (!isPinUnlocked) {
+      openDayModal(endDate);
+      return;
+    }
     const start = new Date(startDate);
     const end = new Date(endDate);
     const [from, to] = start <= end ? [start, end] : [end, start];
@@ -386,6 +447,7 @@ export default function App() {
     const type = event.eventType || EVENT_TYPE.NOTE;
     setEditingEventId(event.id);
     setTitle(event.title);
+    setDetails(event.details || '');
     setColor(type === EVENT_TYPE.NOTE ? event.color : defaultColorForType(type));
     setEventType(type);
     setOverrideTargetType(event.overrideTargetType || '');
@@ -399,8 +461,9 @@ export default function App() {
     setEditingEventId(null);
     setEventType(type);
     setOverrideTargetType(targetType);
-    setTitle(type === EVENT_TYPE.NOTE ? '' : normalizeEventTitle(type, ''));
     const existingSameType = activeDayOverrideEvents.find((event) => (event.eventType || EVENT_TYPE.NOTE) === type);
+    setTitle(existingSameType?.title || defaultTitleForType(type));
+    setDetails(existingSameType?.details || '');
     setColor(existingSameType?.color || defaultColorForType(type));
     setShowEventForm(true);
     const start = modalRange?.start || selectedDate;
@@ -480,47 +543,45 @@ export default function App() {
     const normalizedTitle = normalizeEventTitle(eventType, title);
     const resolvedColor = eventType === EVENT_TYPE.NOTE ? color : defaultColorForType(eventType);
 
-    if (editingEventId) {
-      setCustomEvents((events) =>
-        events.map((event) =>
-          event.id === editingEventId
-            ? {
-                ...event,
-                title: normalizedTitle,
-                color: resolvedColor,
-                eventType,
-                overrideTargetType: eventType === EVENT_TYPE.HIDE ? overrideTargetType : ''
-              }
-            : event
-        )
-      );
-    } else {
-      const defaultStart = modalRange?.start || activeDate;
-      const defaultEnd = modalRange?.end || activeDate;
-      const pickedStart = rangeStartInput ? new Date(`${rangeStartInput}T00:00:00`) : defaultStart;
-      const pickedEnd = rangeEndInput ? new Date(`${rangeEndInput}T00:00:00`) : defaultEnd;
-      const [rangeStart, rangeEnd] = pickedStart <= pickedEnd ? [pickedStart, pickedEnd] : [pickedEnd, pickedStart];
-      const dates = [];
-      const d = new Date(rangeStart);
-      const seriesId = createEventId();
-      while (d <= rangeEnd) {
-        dates.push(toDayKey(d));
-        d.setDate(d.getDate() + 1);
+    const defaultStart = modalRange?.start || activeDate;
+    const defaultEnd = modalRange?.end || activeDate;
+    const pickedStart = rangeStartInput ? new Date(`${rangeStartInput}T00:00:00`) : defaultStart;
+    const pickedEnd = rangeEndInput ? new Date(`${rangeEndInput}T00:00:00`) : defaultEnd;
+    const [rangeStart, rangeEnd] = pickedStart <= pickedEnd ? [pickedStart, pickedEnd] : [pickedEnd, pickedStart];
+    const dates = [];
+    const d = new Date(rangeStart);
+    while (d <= rangeEnd) {
+      dates.push(toDayKey(d));
+      d.setDate(d.getDate() + 1);
+    }
+
+    setCustomEvents((events) => {
+      let baseEvents = events;
+      let nextSeriesId = createEventId();
+
+      if (editingEventId) {
+        const original = events.find((event) => event.id === editingEventId);
+        if (original) {
+          nextSeriesId = original.seriesId || nextSeriesId;
+          baseEvents = events.filter((event) =>
+            original.seriesId ? event.seriesId !== original.seriesId : event.id !== original.id
+          );
+        }
       }
 
-      setCustomEvents((events) => [
-        ...events,
-        ...dates.map((dateKey) => ({
-          id: createEventId(),
-          seriesId,
-          title: normalizedTitle,
-          color: resolvedColor,
-          eventType,
-          overrideTargetType: eventType === EVENT_TYPE.HIDE ? overrideTargetType : '',
-          date: dateKey
-        }))
-      ]);
-    }
+      const created = dates.map((dateKey) => ({
+        id: createEventId(),
+        seriesId: nextSeriesId,
+        title: normalizedTitle,
+        color: resolvedColor,
+        eventType,
+        overrideTargetType: eventType === EVENT_TYPE.HIDE ? overrideTargetType : '',
+        details,
+        date: dateKey
+      }));
+
+      return [...baseEvents, ...created];
+    });
 
     resetEventForm();
   }
@@ -581,6 +642,7 @@ export default function App() {
           blockedDays={effectiveAvailability.blockedDays}
           checkoutDays={effectiveAvailability.checkoutDays}
           blockedLabelByDay={effectiveAvailability.blockedLabelByDay}
+          bookedLabelByDay={effectiveAvailability.bookedLabelByDay}
           customEventsByDay={customEventsByDay}
           selectedDate={selectedDate}
           onSelectDate={openDayModal}
@@ -599,75 +661,20 @@ export default function App() {
                 Close
               </button>
             </header>
-            {isRangeMode ? <p className="muted">Adding an event will apply to every selected day in this range.</p> : null}
+            {isRangeMode && isPinUnlocked ? (
+              <p className="muted">Adding an event will apply to every selected day in this range.</p>
+            ) : null}
 
             <form className="event-form" onSubmit={saveCustomEvent}>
-              {!showEventForm ? (
+              {!isPinUnlocked ? null : !showEventForm ? (
                 <div className="override-options">
-                  {overrideTypesForModal.includes(EVENT_TYPE.BOOKING) ? (
-                    <div className="event-row">
-                      <input className="event-color-chip" type="color" value={defaultColorForType(EVENT_TYPE.BOOKING)} readOnly disabled />
-                      <span>Booking</span>
-                      <button type="button" onClick={() => startCreateEvent(EVENT_TYPE.BOOKING)}>
-                        Edit
-                      </button>
-                      {hiddenOverrideByTargetType[EVENT_TYPE.BOOKING] ? (
-                        <button type="button" onClick={() => restoreOverride(hiddenOverrideByTargetType[EVENT_TYPE.BOOKING])}>
-                          Show
-                        </button>
-                      ) : (
-                        <button type="button" onClick={() => applyImmediateHide(EVENT_TYPE.BOOKING)}>
-                          Hide
-                        </button>
-                      )}
-                    </div>
-                  ) : null}
-
-                  {overrideTypesForModal.includes(EVENT_TYPE.BLOCKED) ? (
-                    <div className="event-row">
-                      <input className="event-color-chip" type="color" value={defaultColorForType(EVENT_TYPE.BLOCKED)} readOnly disabled />
-                      <span>Blocked</span>
-                      <button type="button" onClick={() => startCreateEvent(EVENT_TYPE.BLOCKED)}>
-                        Edit
-                      </button>
-                      {hiddenOverrideByTargetType[EVENT_TYPE.BLOCKED] ? (
-                        <button type="button" onClick={() => restoreOverride(hiddenOverrideByTargetType[EVENT_TYPE.BLOCKED])}>
-                          Show
-                        </button>
-                      ) : (
-                        <button type="button" onClick={() => applyImmediateHide(EVENT_TYPE.BLOCKED)}>
-                          Hide
-                        </button>
-                      )}
-                    </div>
-                  ) : null}
-
-                  {overrideTypesForModal.includes(EVENT_TYPE.CLEANING) ? (
-                    <div className="event-row">
-                      <input className="event-color-chip" type="color" value={defaultColorForType(EVENT_TYPE.CLEANING)} readOnly disabled />
-                      <span>Cleaning</span>
-                      <button type="button" onClick={() => startCreateEvent(EVENT_TYPE.CLEANING)}>
-                        Edit
-                      </button>
-                      {hiddenOverrideByTargetType[EVENT_TYPE.CLEANING] ? (
-                        <button type="button" onClick={() => restoreOverride(hiddenOverrideByTargetType[EVENT_TYPE.CLEANING])}>
-                          Show
-                        </button>
-                      ) : (
-                        <button type="button" onClick={() => applyImmediateHide(EVENT_TYPE.CLEANING)}>
-                          Hide
-                        </button>
-                      )}
-                    </div>
-                  ) : null}
-
                   <button type="button" onClick={() => startCreateEvent(EVENT_TYPE.NOTE)}>
                     Add New Event
                   </button>
                 </div>
               ) : null}
 
-              {showEventForm ? (
+              {showEventForm && isPinUnlocked ? (
                 <div className="event-form-fields">
                   <div className="override-range-fields">
                     <label>
@@ -691,10 +698,16 @@ export default function App() {
                   </div>
                   <input
                     type="text"
-                    placeholder={eventType === EVENT_TYPE.NOTE ? 'Event title' : 'Auto title from event type'}
+                    placeholder="Event title"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    disabled={!isPinUnlocked || eventType !== EVENT_TYPE.NOTE}
+                    disabled={!isPinUnlocked || eventType === EVENT_TYPE.HIDE}
+                  />
+                  <textarea
+                    placeholder="Details"
+                    value={details}
+                    onChange={(e) => setDetails(e.target.value)}
+                    disabled={!isPinUnlocked}
                   />
                   <label>
                     Color
@@ -728,21 +741,62 @@ export default function App() {
               ) : null}
             </form>
 
-            {!isRangeMode ? (
+            {!isRangeMode && !showEventForm && (activeDayAirbnbRows.length > 0 || activeDayNoteEvents.length > 0) ? (
               <div className="event-list">
-                {activeDayNoteEvents.length === 0 ? <p className="muted">No custom events for this day.</p> : null}
+                {activeDayAirbnbRows.map((row) => (
+                  <div key={row.key} className="event-row">
+                    <input className="event-color-chip" type="color" value={defaultColorForType(row.type)} readOnly disabled />
+                    <span>{row.label}</span>
+                    {isPinUnlocked ? (
+                      <>
+                        <button type="button" onClick={() => startCreateEvent(row.type)}>
+                          Edit
+                        </button>
+                        {hiddenOverrideByTargetType[row.type] ? (
+                          <button type="button" onClick={() => restoreOverride(hiddenOverrideByTargetType[row.type])}>
+                            Show
+                          </button>
+                        ) : (
+                          <button type="button" onClick={() => applyImmediateHide(row.type)}>
+                            Hide
+                          </button>
+                        )}
+                      </>
+                    ) : null}
+                  </div>
+                ))}
                 {activeDayNoteEvents.map((event) => (
                   <div key={event.id} className="event-row">
                     <input className="event-color-chip" type="color" value={event.color} readOnly disabled />
                     <span>{event.title}</span>
-                    <button type="button" onClick={() => startEditEvent(event)}>
-                      Edit
-                    </button>
-                    <button type="button" onClick={() => removeCustomEvent(event)}>
-                      Delete
-                    </button>
+                    {isPinUnlocked ? (
+                      <>
+                        <button type="button" onClick={() => startEditEvent(event)}>
+                          Edit
+                        </button>
+                        <button type="button" onClick={() => removeCustomEvent(event)}>
+                          Delete
+                        </button>
+                      </>
+                    ) : null}
+                    {event.details ? <small>{event.details}</small> : null}
                   </div>
                 ))}
+                {activeDayAirbnbRows
+                  .filter((row) => row.details)
+                  .map((row) => (
+                    <p key={`${row.key}-details`} className="muted">
+                      {row.label}: {row.details}
+                    </p>
+                  ))}
+              </div>
+            ) : null}
+            {!isRangeMode && showEventForm ? (
+              <div className="event-list">
+                <div className="event-row">
+                  <input className="event-color-chip" type="color" value={eventType === EVENT_TYPE.NOTE ? color : defaultColorForType(eventType)} readOnly disabled />
+                  <span>{title || defaultTitleForType(eventType)}</span>
+                </div>
               </div>
             ) : null}
           </section>
