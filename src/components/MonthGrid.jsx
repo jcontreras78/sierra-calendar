@@ -18,6 +18,14 @@ function isPastDay(date) {
   return d < today;
 }
 
+function isTodayDay(date) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d.getTime() === today.getTime();
+}
+
 function eventSignature(event) {
   return `${event.title}__${event.color}`;
 }
@@ -27,6 +35,7 @@ export default function MonthGrid({
   bookedDays,
   blockedDays,
   checkoutDays,
+  blockedLabelByDay,
   customEventsByDay,
   selectedDate,
   onSelectDate,
@@ -89,14 +98,23 @@ export default function MonthGrid({
     const isBlocked = blockedDays.has(dayKey);
     const isCheckout = checkoutDays.has(dayKey);
     const isPast = isPastDay(day) && !isBooked && !isBlocked;
+    const isToday = isTodayDay(day);
     const bookingContinuesFromPrev = bookedDays.has(prevDayKey);
     const bookingContinuesToNext = bookedDays.has(nextDayKey) || checkoutDays.has(nextDayKey);
+    const shouldShowCheckoutBand = isCheckout && bookingContinuesFromPrev;
     const showBookedLabel = isBooked && !bookingContinuesFromPrev;
     const blockedContinuesFromPrev = blockedDays.has(prevDayKey);
     const blockedContinuesToNext = blockedDays.has(nextDayKey);
     const isCheckoutBlocked = isBlocked && isCheckout;
     const isSingleDayBlocked = !blockedContinuesFromPrev && !blockedContinuesToNext;
     const shouldShowBlockedBand = isBlocked && !isSingleDayBlocked;
+    const blockedLabel = blockedLabelByDay?.[dayKey] || 'Blocked / Cleaning';
+    const blockedMobileLabel =
+      blockedLabel === 'Cleaning'
+        ? 'Clean'
+        : blockedLabel === 'Blocked'
+          ? 'Block'
+          : 'Clean';
     const inCurrentMonth = day.getMonth() === month.getMonth();
     const isSelected = selectedDate && toDayKey(selectedDate) === dayKey;
     const dragStartKey = dragStart ? toDayKey(dragStart) : '';
@@ -120,6 +138,7 @@ export default function MonthGrid({
           isBlocked ? 'day-cell--blocked' : '',
           isCheckout ? 'day-cell--checkout' : '',
           isPast ? 'day-cell--past' : '',
+          isToday ? 'day-cell--today' : '',
           isInDragRange ? 'day-cell--dragging' : '',
           isSelected ? 'day-cell--selected' : ''
         ]
@@ -143,7 +162,7 @@ export default function MonthGrid({
               .trim()}
           />
         ) : null}
-        {isCheckout ? (
+        {shouldShowCheckoutBand ? (
           <span
             className={[
               'booking-band',
@@ -174,6 +193,7 @@ export default function MonthGrid({
           const continuesFromPrev = hasEventWithSignature(prevDayKey, signature);
           const continuesToNext = hasEventWithSignature(nextDayKey, signature);
           const showLabel = !continuesFromPrev;
+          const customBase = isBlocked ? 92 : isBooked || isCheckout ? 66 : 36;
 
           return (
             <span
@@ -186,7 +206,7 @@ export default function MonthGrid({
                 .filter(Boolean)
                 .join(' ')
                 .trim()}
-              style={{ '--custom-color': event.color, '--custom-row': idx }}
+              style={{ '--custom-color': event.color, '--custom-row': idx, '--custom-base': `${customBase}px` }}
               title={event.title}
             >
               {showLabel ? <span className="custom-band__label">{event.title}</span> : null}
@@ -194,16 +214,13 @@ export default function MonthGrid({
           );
         })}
         <span className="day-cell__number">{day.getDate()}</span>
+        {isToday ? <span className="day-cell__today-marker" aria-hidden="true" /> : null}
         <div className="day-cell__meta">
           {showBookedLabel ? <span className="pill pill--booked">Booked</span> : null}
           {isBlocked ? (
             <span className={`pill pill--blocked${isCheckout ? ' pill--blocked-below-booking' : ''}`}>
-              <span className="blocked-label-desktop">Blocked / Cleaning</span>
-              <span className="blocked-label-mobile">
-                Block
-                <br />
-                Clean
-              </span>
+              <span className="blocked-label-desktop">{blockedLabel}</span>
+              <span className="blocked-label-mobile">{blockedMobileLabel}</span>
             </span>
           ) : null}
           {events.length > 2 ? <span className="event-more">+{events.length - 2} more</span> : null}

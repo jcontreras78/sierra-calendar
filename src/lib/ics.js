@@ -80,21 +80,34 @@ function isBlockedSummary(summary) {
   return blockedTerms.some((term) => text.includes(term));
 }
 
+function blockedLabelFromSummary(summary) {
+  const text = String(summary || '').toLowerCase();
+  if (text.includes('clean')) return 'Cleaning';
+  return 'Blocked';
+}
+
 export function availabilityDaysFromEvents(events) {
   const booked = new Set();
   const blocked = new Set();
   const checkout = new Set();
+  const blockedLabelByDay = {};
 
   for (const event of events) {
     const isBlocked = isBlockedSummary(event.summary);
     const days = eachDayBetween(event.dtstart, event.dtend);
     const target = isBlocked ? blocked : booked;
     for (const day of days) target.add(toDayKey(day));
+    if (isBlocked) {
+      const label = blockedLabelFromSummary(event.summary);
+      for (const day of days) {
+        blockedLabelByDay[toDayKey(day)] = label;
+      }
+    }
 
     if (!isBlocked && event.dtend instanceof Date && !Number.isNaN(event.dtend.valueOf())) {
       checkout.add(toDayKey(event.dtend));
     }
   }
 
-  return { bookedDays: booked, blockedDays: blocked, checkoutDays: checkout };
+  return { bookedDays: booked, blockedDays: blocked, checkoutDays: checkout, blockedLabelByDay };
 }
